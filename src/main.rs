@@ -34,6 +34,7 @@ enum CLICommand {
     Status,
     Open,
     Login,
+    Logout
 }
 
 #[derive(Debug)]
@@ -150,7 +151,14 @@ async fn get_runs_for_current_branch(cwd: Option<PathBuf>) -> Result<(ListCheckR
         .checks(github_repo.owner, github_repo.repo)
         .list_check_runs_for_git_ref(Commitish(git_ref.clone()))
         .send()
-        .await?;
+        .await
+        .map_err(|err| {
+            if matches!(err, octocrab::Error::GitHub { .. }) {
+                println!("{}", "Failed to fetch check runs. Is your repository private? If so, you should log into your GitHub account with `fj login`".yellow());
+            }
+
+            err
+        })?;
 
     Ok((runs, git_ref))
 }
@@ -217,6 +225,12 @@ async fn main() -> Result<()> {
             } else {
                 eprintln!("No run selected");
             }
+        }
+        CLICommand::Logout => {
+            let base_dirs = xdg::BaseDirectories::with_prefix("fj")?;
+            let config_file_path = base_dirs.place_config_file("github.toml")?;
+            fs::remove_file(&config_file_path)?;
+            println!("Successfully logged out");
         }
         CLICommand::Login => {
             let octocrab = octocrab::Octocrab::builder()
