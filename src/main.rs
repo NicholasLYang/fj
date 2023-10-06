@@ -68,6 +68,20 @@ impl Git {
         let output = self
             .cmd()
             .arg("rev-parse")
+            .arg("--short")
+            .arg("HEAD")
+            .output()
+            .await?;
+
+        let git_ref = String::from_utf8(output.stdout)?;
+        Ok(git_ref.trim().to_string())
+    }
+
+    // Gets the name version of ref, i.e. `main`
+    async fn get_current_ref_as_name(&self) -> Result<String> {
+        let output = self
+            .cmd()
+            .arg("rev-parse")
             .arg("--abbrev-ref")
             .arg("HEAD")
             .output()
@@ -131,6 +145,7 @@ fn print_check_runs(git_ref: &str, runs: ListCheckRuns) {
 async fn get_runs_for_current_branch(cwd: Option<PathBuf>) -> Result<(ListCheckRuns, String)> {
     let git = Git::new(cwd)?;
     let git_ref = git.get_current_ref().await?;
+    debug!("found git ref for current branch: {}", git_ref);
     let octocrab = match AuthConfig::load() {
         Ok(auth) => Arc::new(
             OctocrabBuilder::new()
@@ -160,7 +175,9 @@ async fn get_runs_for_current_branch(cwd: Option<PathBuf>) -> Result<(ListCheckR
             err
         })?;
 
-    Ok((runs, git_ref))
+    let pretty_git_ref = git.get_current_ref_as_name().await?;
+
+    Ok((runs, pretty_git_ref))
 }
 
 // Idk kinda arbitrary
@@ -200,17 +217,17 @@ async fn main() -> Result<()> {
     match args.command {
         CLICommand::Status => {
             let (runs, git_ref) = get_runs_for_current_branch(args.cwd).await?;
-
             print_check_runs(&git_ref, runs);
         }
         CLICommand::Open => {
-            let (runs, _git_ref) = get_runs_for_current_branch(args.cwd).await?;
+            let (runs, git_ref) = get_runs_for_current_branch(args.cwd).await?;
             let items = runs
                 .check_runs
                 .iter()
                 .map(|run| run.name.to_string())
                 .collect::<Vec<_>>();
 
+            println!("Found {} runs for {}", runs.total_count, git_ref);
             let selection = FuzzySelect::with_theme(&ColorfulTheme::default())
                 .items(&items)
                 .default(0)
