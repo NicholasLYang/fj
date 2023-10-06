@@ -30,4 +30,5 @@ fj login
 `gh`, GitHub's official CLI, does allow you to list check runs, but only in the context of pull requests. Also, it 
 requires you to either look up your PR number or remember it. That seemed like unnecessary friction to me.
 
+I got sick of refreshing my browser to see if my check runs had finished, so I wrote this.
 
