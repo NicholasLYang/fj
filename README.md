@@ -1,28 +1,31 @@
-# fj — A Simple GitHub Checks CLI
+# fjf — A Simple GitHub Checks CLI
 
-`fj` lets you check the status of your GitHub check runs for the current git ref:
+`fjf` lets you check the status of your GitHub check runs for the current git ref:
 
 ```bash
-fj status
+> fjf status
+Found 1 runs for main
+
+build   🟢
 ```
 
 It attempts to detect the GitHub repository from your origin remote url, but if it can't, you can manually supply 
 the repository owner and name:
 
 ```bash
-fj status --owner NicholasLYang --repo fj
+fjf status --owner NicholasLYang --repo vicuna
 ```
 
 You can also open a check run in your browser:
 
 ```bash
-fj open
+fjf open
 ```
 
-If you want to use `fj` on private repositories, you can login:
+If you want to use `fjf` on private repositories, you can login to GitHub:
 
 ```bash
-fj login
+fjf login
 ```
 
 ## Why Does This Exist?
