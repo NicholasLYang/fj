@@ -13,7 +13,7 @@ use octocrab::OctocrabBuilder;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 use tokio::process::Command;
@@ -31,10 +31,14 @@ struct CLIArgs {
 
 #[derive(Debug, Clone, Subcommand)]
 enum CLICommand {
+    #[command(alias = "s")]
     Status,
+    #[command(alias = "o")]
     Open,
+    #[command(alias = "b")]
+    Branch,
     Login,
-    Logout
+    Logout,
 }
 
 #[derive(Debug)]
@@ -43,15 +47,15 @@ struct GitHubRepository {
     repo: String,
 }
 
-struct Git {
+struct Git<'a> {
     bin: PathBuf,
-    cwd: Option<PathBuf>,
+    cwd: Option<&'a Path>,
 }
 
 const GITHUB_CLIENT_ID: &str = "Iv1.6759afe4a207433f";
 
-impl Git {
-    fn new(cwd: Option<PathBuf>) -> Result<Self> {
+impl<'a> Git<'a> {
+    fn new(cwd: Option<&'a Path>) -> Result<Git<'a>> {
         let bin = which("git")?;
         Ok(Self { bin, cwd })
     }
@@ -64,12 +68,34 @@ impl Git {
         cmd
     }
 
-    async fn get_current_ref(&self) -> Result<String> {
+    async fn get_branches(&self) -> Result<Vec<String>> {
+        let output = self
+            .cmd()
+            .arg("branch")
+            .arg("--format='%(refname:short)'")
+            .output()
+            .await?;
+        let str = String::from_utf8(output.stdout)?;
+
+        Ok(str
+            .lines()
+            .map(|l| {
+                let l = l.trim();
+                let l = l.strip_prefix('\'').unwrap_or(l);
+                let l = l.strip_suffix('\'').unwrap_or(l);
+
+                l.to_string()
+            })
+            .collect())
+    }
+
+    // Gets the ref as a short commit
+    async fn get_ref_as_commit(&self, git_ref: &str) -> Result<String> {
         let output = self
             .cmd()
             .arg("rev-parse")
             .arg("--short")
-            .arg("HEAD")
+            .arg(git_ref)
             .output()
             .await?;
 
@@ -78,12 +104,12 @@ impl Git {
     }
 
     // Gets the name version of ref, i.e. `main`
-    async fn get_current_ref_as_name(&self) -> Result<String> {
+    async fn get_ref_as_name(&self, git_ref: &str) -> Result<String> {
         let output = self
             .cmd()
             .arg("rev-parse")
             .arg("--abbrev-ref")
-            .arg("HEAD")
+            .arg(git_ref)
             .output()
             .await?;
 
@@ -142,10 +168,11 @@ fn print_check_runs(git_ref: &str, runs: ListCheckRuns) {
     }
 }
 
-async fn get_runs_for_current_branch(cwd: Option<PathBuf>) -> Result<(ListCheckRuns, String)> {
+async fn get_runs_for_ref(cwd: Option<&Path>, git_ref: &str) -> Result<(ListCheckRuns, String)> {
     let git = Git::new(cwd)?;
-    let git_ref = git.get_current_ref().await?;
-    debug!("found git ref for current branch: {}", git_ref);
+    let git_ref_commit = git.get_ref_as_commit(git_ref).await?;
+    debug!("found git commit: {}", git_ref_commit);
+
     let octocrab = match AuthConfig::load() {
         Ok(auth) => Arc::new(
             OctocrabBuilder::new()
@@ -164,7 +191,7 @@ async fn get_runs_for_current_branch(cwd: Option<PathBuf>) -> Result<(ListCheckR
 
     let runs = octocrab
         .checks(github_repo.owner, github_repo.repo)
-        .list_check_runs_for_git_ref(Commitish(git_ref.clone()))
+        .list_check_runs_for_git_ref(Commitish(git_ref_commit))
         .send()
         .await
         .map_err(|err| {
@@ -175,9 +202,9 @@ async fn get_runs_for_current_branch(cwd: Option<PathBuf>) -> Result<(ListCheckR
             err
         })?;
 
-    let pretty_git_ref = git.get_current_ref_as_name().await?;
+    let git_ref_name = git.get_ref_as_name(git_ref).await?;
 
-    Ok((runs, pretty_git_ref))
+    Ok((runs, git_ref_name))
 }
 
 // Idk kinda arbitrary
@@ -216,11 +243,11 @@ async fn main() -> Result<()> {
 
     match args.command {
         CLICommand::Status => {
-            let (runs, git_ref) = get_runs_for_current_branch(args.cwd).await?;
+            let (runs, git_ref) = get_runs_for_ref(args.cwd.as_deref(), "HEAD").await?;
             print_check_runs(&git_ref, runs);
         }
         CLICommand::Open => {
-            let (runs, git_ref) = get_runs_for_current_branch(args.cwd).await?;
+            let (runs, git_ref) = get_runs_for_ref(args.cwd.as_deref(), "HEAD").await?;
             let items = runs
                 .check_runs
                 .iter()
@@ -241,6 +268,23 @@ async fn main() -> Result<()> {
                 }
             } else {
                 eprintln!("No run selected");
+            }
+        }
+        CLICommand::Branch => {
+            let git = Git::new(args.cwd.as_deref())?;
+            let branches = git.get_branches().await?;
+
+            let selection = FuzzySelect::with_theme(&ColorfulTheme::default())
+                .items(&branches)
+                .default(0)
+                .interact_on_opt(&Term::stderr())?;
+
+            if let Some(index) = selection {
+                let (runs, git_ref_name) =
+                    get_runs_for_ref(args.cwd.as_deref(), &branches[index]).await?;
+                print_check_runs(&git_ref_name, runs);
+            } else {
+                eprintln!("No branch selected");
             }
         }
         CLICommand::Logout => {
